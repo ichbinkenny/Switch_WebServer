@@ -6,15 +6,23 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <sys/errno.h>
+#include <sys/types.h>
 #include <pthread.h>
 #include <malloc.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <dirent.h>
 
 // Include the main libnx system header, for Switch development
 #include <switch.h>
 
-#define BACKLOG_LIMIT 5
+#include <dirent.h>
 
-char* getPageFromRequest(char* request){
+#define BACKLOG_LIMIT 5
+#define MAIN_PAGE "/index.html"
+#define MAIN_PAGE_SIZE 2048
+
+void getPageFromRequest(char* request, char** pageData){
   if(strstr(request, "GET") != NULL){
     printf("WEB GET REQUEST!\n");
   }
@@ -22,13 +30,76 @@ char* getPageFromRequest(char* request){
     printf("WEB POST REQUEST!\n");
   }
   else{
-    return "<h1>404 Page Not Found!</h1>";
+    *pageData = "<h1>404 Page Not Found!</h1>";
+    return;
   }
   consoleUpdate(NULL);
-  char* pageRequst = strstr(request, "/");
-  printf("Page requested: %s\n", pageRequst);
+  char* pageRequest = strstr(request, "/");
+  char fileList[1024 * 1024 * 1024];
+  for(int i = 0; i < strlen(pageRequest); i++){
+    if(pageRequest[i] == ' '){
+      pageRequest[i] = '\0';
+      break;
+    }
+  }
+  if(strlen(pageRequest) == 1 && pageRequest[0] == '/'){
+    pageRequest = MAIN_PAGE;
+  }
+  else if(strcmp("/cmd=listFiles", pageRequest) == 0){
+    char* filepath = "sdmc:/switch/WebServer/";
+    char* name;
+    printf("Command specified!\n");
+    pageRequest = MAIN_PAGE;
+    DIR* directory;
+    struct dirent* entry;
+    unsigned int offset = 0;
+    directory = opendir(".");
+    if(directory){
+      printf("Opened directory\n");
+      while((entry = readdir(directory)) != NULL){
+        //add each item to a list of some sort
+        name = entry->d_name;
+        /* for(int i = 0; i < strlen(name); i++){ */
+        /*   fileList[offset + i] = name[i]; */
+        /* } */
+        printf("Name is: %s\n", name);
+      }
+      //printf("NAME: %s\n", fileList);
+      closedir(directory);
+    }
+    else{
+      printf("Failed to open directory!\n");
+    }
+    consoleUpdate(NULL);
+  }
+  printf("Page requested: %s\n", pageRequest);
+  //Try to load the requested file
+  char* FILEPATH =  "sdmc:/switch/WebServer";
+  char* filename = (char*) malloc(1 + strlen(pageRequest) + strlen(FILEPATH));
+  strcpy(filename, FILEPATH);
+  printf("FILENAME: %s\n", filename);
+  strcat(filename, pageRequest);
+  printf("Trying to open file: %s\n", filename);
   consoleUpdate(NULL);
-  return "TEST\n";
+  char* buffer;
+  FILE* fds;
+  fds = fopen(filename, "r");
+  if(fds){
+    fseek(fds, 0, SEEK_END);
+    long filesize = ftell(fds);
+    fseek(fds, 0, SEEK_SET);
+    buffer = malloc(filesize);
+    fread(buffer, filesize, 1, fds);
+    fclose(fds);
+    buffer[filesize] = '\0';
+  }
+  else{
+    buffer = "FILE NOT FOUND!\n";
+  }
+    //printf("DATA: %s\n", buffer);
+  consoleUpdate(NULL);
+  *pageData = buffer;
+  return;
 }
 
 int createWebService(){
@@ -71,12 +142,25 @@ int createWebService(){
       printf("ERROR WHILE READING!\n");
       continue;
     }
-    printf("Read %d bytes\n", num_read);
+    //printf("Read %d bytes\n", num_read);
     buffer[num_read] = '\0';
-    printf("Received: %s\n", buffer);
-
-    char* page = getPageFromRequest(buffer);
+    //printf("Received: %s\n", buffer);
+    //End request after first line.
+    for(int i = 0; i < strlen(buffer); i++){
+      if(buffer[i] == '\n'){
+        buffer[i] = '\0';
+        break;
+      }
+    }
+    if(strstr(buffer, "favicon") != NULL){
+      write(clifd, "\0", 1);
+      close(clifd);
+      continue;
+    }
+    char* page;
+    getPageFromRequest(buffer, &page);
     //printf("I want to respond with %s\n", buffer);
+    //printf("Page data: %s\n", page);
     write(clifd, page, strlen(page));
     close(clifd);
     }
